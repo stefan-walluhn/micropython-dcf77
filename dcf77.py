@@ -24,7 +24,7 @@ class DCF77BeaconError(DCF77Error): ...
 class ParityError(DCF77BeaconError): ...
 
 
-class UncompletedBufferError(DCF77BeaconError): ...
+class IncompleteBufferError(DCF77BeaconError): ...
 
 
 class DCF77Handler:
@@ -94,39 +94,67 @@ class DCF77Decoder:
         )
 
 
-class DCF77CadenceCounter:
+class DCF77SyncDetector:
     JITTER = 50
 
+    class TickBuffer:
+        LEN = 3
+
+        def __init__(self):
+            self.reset()
+
+        def reset(self):
+            self.buffer = []
+
+        def add(self, tick):
+            self.buffer.insert(0, tick)
+            if len(self.buffer) > DCF77SyncDetector.TickBuffer.LEN:
+                self.buffer.pop()
+
+        @property
+        def last_tick(self):
+            return self.buffer[0]
+
+        @property
+        def saturated(self):
+            return len(self.buffer) >= DCF77SyncDetector.TickBuffer.LEN
+
+        def __iter__(self):
+            yield from self.buffer
+
     def __init__(self):
-        self.reset()
+        self.tick_buffer = DCF77SyncDetector.TickBuffer()
 
     def reset(self):
-        self._cadence = []
-        self._calibrating = True
+        self.tick_buffer.reset()
 
-    def _calibrate(self, tick):
-        for i, t in enumerate(self._cadence):
+    @property
+    def calibrating(self):
+        return not self.tick_buffer.saturated
+
+    def calibrate(self, tick):
+        for i, t in enumerate(self.tick_buffer):
             if (
                 abs((i + 1) * 1000 - time.ticks_diff(tick, t))
-                > DCF77CadenceCounter.JITTER
+                > DCF77SyncDetector.JITTER
             ):
-                self._cadence = []
+                self.reset()
                 return
 
-        self._cadence.insert(0, tick)
-        if len(self._cadence) > 3:
-            self._calibrating = False
+        self.tick_buffer.add(tick)
 
     def __call__(self, tick):
-        if self._calibrating:
-            self._calibrate(tick)
+        if self.calibrating:
+            self.calibrate(tick)
             raise InvalidTick
 
         for i in (1, 2, 3):
-            delta_ms = i * 1000 - time.ticks_diff(tick, self._cadence[0])
-            if abs(delta_ms) < DCF77CadenceCounter.JITTER:
-                self._cadence[0] = tick
-                return i
+            delta_ms = i * 1000 - time.ticks_diff(
+                tick, self.tick_buffer.last_tick
+            )
+            if abs(delta_ms) < DCF77SyncDetector.JITTER:
+                self.tick_buffer.add(tick)
+                return i > 1
 
             if delta_ms > 0:
                 raise InvalidTick
@@ -143,7 +171,7 @@ class DCF77:
         timer,
         handler,
         decode=DCF77Decoder(),
-        counter=DCF77CadenceCounter(),
+        is_sync_tick=DCF77SyncDetector(),
         min_buffer_size=59,
     ):
         self.enable_pin = enable_pin
@@ -152,7 +180,7 @@ class DCF77:
         self.handler = handler
 
         self.decode = decode
-        self.counter = counter
+        self.is_sync_tick = is_sync_tick
         self.min_buffer_size = min_buffer_size
 
         self.reset()
@@ -163,7 +191,7 @@ class DCF77:
     @property
     def beacon(self):
         if self.__buffer__ < (1 << self.min_buffer_size):
-            raise UncompletedBufferError(
+            raise IncompleteBufferError(
                 f"uncompleted buffer: {bin(self.__buffer__)}"
             )
 
@@ -188,7 +216,7 @@ class DCF77:
 
     def __tick__(self, tick):
         try:
-            if self.counter(tick) > 1:
+            if self.is_sync_tick(tick):
                 self.handler.on_sync(self.decode(self.beacon))
                 self.reset()
         except InvalidTick as error:
