@@ -24,7 +24,7 @@ class DCF77BeaconError(DCF77Error): ...
 class ParityError(DCF77BeaconError): ...
 
 
-class IncompleteBufferError(DCF77BeaconError): ...
+class IncompleteBeaconError(DCF77BeaconError): ...
 
 
 class DCF77Handler:
@@ -37,7 +37,7 @@ class DCF77Handler:
     def on_tick_error(self, _):
         pass
 
-    def on_beacon_error(self, _):
+    def on_sync_error(self, _):
         pass
 
 
@@ -191,8 +191,8 @@ class DCF77:
     @property
     def beacon(self):
         if self.__buffer__ < (1 << self.min_buffer_size):
-            raise IncompleteBufferError(
-                f"uncompleted buffer: {bin(self.__buffer__)}"
+            raise IncompleteBeaconError(
+                f"incomplete beacon: {bin(self.__buffer__)}"
             )
 
         # XXX reduce
@@ -223,7 +223,7 @@ class DCF77:
             self.handler.on_tick_error(error)
             return
         except DCF77BeaconError as error:
-            self.handler.on_beacon_error(error)
+            self.handler.on_sync_error(error)
             self.reset()
 
         self.timer.init(
