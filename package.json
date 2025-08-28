@@ -1,0 +1,7 @@
+{
+  "urls": [
+    ["dcf77.py", "github:stefan-walluhn/micropython-dcf77/dcf77.py"]
+  ],
+  "deps": [],
+  "version": "0.0.1"
+}
