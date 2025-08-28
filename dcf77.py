@@ -89,8 +89,11 @@ class DCF77Decoder:
             year,
             month,
             day,
+            0,
             self.decode_hour(beacon),
             self.decode_minute(beacon),
+            0,
+            0
         )
 
 

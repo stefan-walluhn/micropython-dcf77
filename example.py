@@ -22,18 +22,7 @@ class RTCHandler(DCF77Handler):
 
     def on_sync(self, timestamp):
         print("syncing clock")
-        self.rtc.datetime(
-            (
-                timestamp[0],
-                timestamp[1],
-                timestamp[2],
-                0,
-                timestamp[3],
-                timestamp[4],
-                0,
-                0,
-            )
-        )
+        self.rtc.datetime(timestamp)
 
     def on_sync_error(self, error):
         print(str(error))
