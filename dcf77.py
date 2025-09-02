@@ -117,7 +117,8 @@ class DCF77:
         self,
         data_pin,
         enable_pin,
-        timer,
+        timer1,
+        timer2,
         handler,
         decode=DCF77Decoder(),
         is_sync_tick=DCF77SyncDetector(),
@@ -125,7 +126,8 @@ class DCF77:
     ):
         self.enable_pin = enable_pin
         self.data_pin = data_pin
-        self.timer = timer
+        self.timer1 = timer1
+        self.timer2 = timer2
         self.handler = handler
 
         self.decode = decode
@@ -164,11 +166,17 @@ class DCF77:
         micropython.schedule(self.__tick__, time.ticks_ms())
 
     def __tick__(self, tick):
-        self.timer.init(
-            period=(50 - time.ticks_diff(time.ticks_ms(), tick)),
+        self.timer1.init(
+            period=(10 - time.ticks_diff(time.ticks_ms(), tick)),
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__sync__(tick),
+            callback=lambda t: self.__sync_callback__(tick),
         )
+
+    def __sync_callback__(self, tick):
+        micropython.schedule(self.__sync__, tick)
+
+    def __read_callback__(self, tick):
+        micropython.schedule(self.__read__, tick)
 
     def __sync__(self, tick):
         if not self.data_pin():
@@ -183,13 +191,13 @@ class DCF77:
             self.handler.on_sync_error(error)
             self.reset()
 
-        self.timer.init(
+        self.timer2.init(
             period=(150 - time.ticks_diff(time.ticks_ms(), tick)),
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__read__(),
+            callback=lambda t: self.__read_callback__(tick),
         )
 
-    def __read__(self):
+    def __read__(self, tick):
         value = self.data_pin()
         self.__buffer__ = (self.__buffer__ << 1) + value
         self.handler.on_tick(value)
