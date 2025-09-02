@@ -235,7 +235,8 @@ class DCF77:
             callback=lambda t: self.__read__(),
         )
 
+    @irq_handler
     def __read__(self):
         value = self.data_pin()
         self.__buffer__ = (self.__buffer__ << 1) + value
-        self.handler.on_tick(value)
+        micropython.schedule(self.handler.on_tick, value)
