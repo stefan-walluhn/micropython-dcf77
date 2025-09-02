@@ -98,72 +98,18 @@ class DCF77Decoder:
 
 
 class DCF77SyncDetector:
-    JITTER = 50
-
-    class TickBuffer:
-        LEN = 3
-
-        def __init__(self):
-            self.reset()
-
-        def reset(self):
-            self.buffer = []
-
-        def add(self, tick):
-            self.buffer.insert(0, tick)
-            if len(self.buffer) > DCF77SyncDetector.TickBuffer.LEN:
-                self.buffer.pop()
-
-        @property
-        def last_tick(self):
-            return self.buffer[0]
-
-        @property
-        def saturated(self):
-            return len(self.buffer) >= DCF77SyncDetector.TickBuffer.LEN
-
-        def __iter__(self):
-            yield from self.buffer
-
     def __init__(self):
-        self.tick_buffer = DCF77SyncDetector.TickBuffer()
-
-    def reset(self):
-        self.tick_buffer.reset()
-
-    @property
-    def calibrating(self):
-        return not self.tick_buffer.saturated
-
-    def calibrate(self, tick):
-        for i, t in enumerate(self.tick_buffer):
-            if (
-                abs((i + 1) * 1000 - time.ticks_diff(tick, t))
-                > DCF77SyncDetector.JITTER
-            ):
-                self.reset()
-                return
-
-        self.tick_buffer.add(tick)
+        self.last_tick = 0
 
     def __call__(self, tick):
-        if self.calibrating:
-            self.calibrate(tick)
-            raise InvalidTick
+        if time.ticks_diff(tick, self.last_tick) > 4000:
+            self.last_tick = tick
 
-        for i in (1, 2, 3):
-            delta_ms = i * 1000 - time.ticks_diff(
-                tick, self.tick_buffer.last_tick
-            )
-            if abs(delta_ms) < DCF77SyncDetector.JITTER:
-                self.tick_buffer.add(tick)
-                return i > 1
+        sync_tick = time.ticks_diff(tick, self.last_tick) > 1500
 
-            if delta_ms > 0:
-                raise InvalidTick
+        self.last_tick = tick
 
-        self.reset()
-        raise InvalidTick
+        return sync_tick
 
 
 class DCF77:
@@ -218,13 +164,21 @@ class DCF77:
         micropython.schedule(self.__tick__, time.ticks_ms())
 
     def __tick__(self, tick):
+        self.timer.init(
+            period=(50 - time.ticks_diff(time.ticks_ms(), tick)),
+            mode=Timer.ONE_SHOT,
+            callback=lambda t: self.__sync__(tick),
+        )
+
+    def __sync__(self, tick):
+        if not self.data_pin():
+            self.handler.on_tick_error(InvalidTick())
+            return
+
         try:
             if self.is_sync_tick(tick):
                 self.handler.on_sync(self.decode(self.beacon))
                 self.reset()
-        except InvalidTick as error:
-            self.handler.on_tick_error(error)
-            return
         except DCF77BeaconError as error:
             self.handler.on_sync_error(error)
             self.reset()
