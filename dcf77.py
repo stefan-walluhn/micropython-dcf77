@@ -93,7 +93,7 @@ class DCF77Decoder:
             self.decode_hour(beacon),
             self.decode_minute(beacon),
             0,
-            0
+            0,
         )
 
 
@@ -132,6 +132,8 @@ class DCF77:
         self.is_sync_tick = is_sync_tick
         self.min_buffer_size = min_buffer_size
 
+        self.__buffer__ = 1 << 60
+
         self.reset()
 
     def reset(self):
@@ -161,10 +163,11 @@ class DCF77:
 
     @irq_handler
     def __trigger__(self, pin):
+        tick = time.ticks_ms()
         self.timers[0].init(
             period=50,
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__sync__(time.ticks_ms()),
+            callback=lambda t: self.__sync__(tick),
         )
 
     @irq_handler
@@ -175,7 +178,9 @@ class DCF77:
 
         try:
             if self.is_sync_tick(tick):
-                micropython.schedule(self.handler.on_sync, self.decode(self.beacon))
+                micropython.schedule(
+                    self.handler.on_sync, self.decode(self.beacon)
+                )
                 self.reset()
         except DCF77BeaconError as error:
             micropython.schedule(self.handler.on_sync_error, error)
@@ -184,7 +189,7 @@ class DCF77:
         self.timers[1].init(
             period=(150 - time.ticks_diff(time.ticks_ms(), tick)),
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__read__()
+            callback=lambda t: self.__read__(),
         )
 
     @irq_handler
