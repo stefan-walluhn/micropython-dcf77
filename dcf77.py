@@ -117,19 +117,17 @@ class DCF77:
         self,
         data_pin,
         enable_pin,
-        timer1,
-        timer2,
         handler,
+        timers=(Timer(0), Timer(1)),
         decode=DCF77Decoder(),
         is_sync_tick=DCF77SyncDetector(),
         min_buffer_size=59,
     ):
         self.enable_pin = enable_pin
         self.data_pin = data_pin
-        self.timer1 = timer1
-        self.timer2 = timer2
         self.handler = handler
 
+        self.timers = timers
         self.decode = decode
         self.is_sync_tick = is_sync_tick
         self.min_buffer_size = min_buffer_size
@@ -163,41 +161,34 @@ class DCF77:
 
     @irq_handler
     def __trigger__(self, pin):
-        micropython.schedule(self.__tick__, time.ticks_ms())
-
-    def __tick__(self, tick):
-        self.timer1.init(
-            period=(10 - time.ticks_diff(time.ticks_ms(), tick)),
+        self.timers[0].init(
+            period=50,
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__sync_callback__(tick),
+            callback=lambda t: self.__sync__(time.ticks_ms()),
         )
 
-    def __sync_callback__(self, tick):
-        micropython.schedule(self.__sync__, tick)
-
-    def __read_callback__(self, tick):
-        micropython.schedule(self.__read__, tick)
-
+    @irq_handler
     def __sync__(self, tick):
         if not self.data_pin():
-            self.handler.on_tick_error(InvalidTick())
+            micropython.schedule(self.handler.on_tick_error, InvalidTick())
             return
 
         try:
             if self.is_sync_tick(tick):
-                self.handler.on_sync(self.decode(self.beacon))
+                micropython.schedule(self.handler.on_sync, self.decode(self.beacon))
                 self.reset()
         except DCF77BeaconError as error:
-            self.handler.on_sync_error(error)
+            micropython.schedule(self.handler.on_sync_error, error)
             self.reset()
 
-        self.timer2.init(
+        self.timers[1].init(
             period=(150 - time.ticks_diff(time.ticks_ms(), tick)),
             mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__read_callback__(tick),
+            callback=lambda t: self.__read__()
         )
 
-    def __read__(self, tick):
+    @irq_handler
+    def __read__(self):
         value = self.data_pin()
         self.__buffer__ = (self.__buffer__ << 1) + value
-        self.handler.on_tick(value)
+        micropython.schedule(self.handler.on_tick, value)
