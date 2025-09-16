@@ -154,15 +154,22 @@ class DCF77:
 
     def start(self):
         self.reset()
-        self.data_pin.irq(trigger=Pin.IRQ_RISING, handler=self.__trigger__)
+        self.__enable_irq__()
         self.enable_pin.off()
 
     def stop(self):
         self.enable_pin.on()
+        self.__disable_irq__()
+
+    def __enable_irq__(self):
+        self.data_pin.irq(trigger=Pin.IRQ_RISING, handler=self.__trigger__)
+
+    def __disable_irq__(self):
         self.data_pin.irq()
 
     @irq_handler
     def __trigger__(self, pin):
+        self.__disable_irq__()
         tick = time.ticks_ms()
         self.timers[0].init(
             period=50,
@@ -174,6 +181,7 @@ class DCF77:
     def __sync__(self, tick):
         if not self.data_pin():
             micropython.schedule(self.handler.on_tick_error, InvalidTick())
+            self.__enable_irq__()
             return
 
         try:
@@ -196,4 +204,5 @@ class DCF77:
     def __read__(self):
         value = self.data_pin()
         self.__buffer__ = (self.__buffer__ << 1) + value
+        self.__enable_irq__()
         micropython.schedule(self.handler.on_tick, value)
