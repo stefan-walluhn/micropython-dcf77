@@ -1,5 +1,6 @@
 import micropython
-from machine import Pin, Timer, RTC
+from machine import RTC, Pin, Timer
+
 from dcf77 import DCF77, DCF77Handler
 
 micropython.alloc_emergency_exception_buf(100)
@@ -28,5 +29,4 @@ class RTCHandler(DCF77Handler):
         print(str(error))
 
 
-dcf = DCF77(Pin(34, Pin.IN), Pin(33, Pin.OUT), Timer(0), RTCHandler(RTC()))
-dcf.start()
+dcf = DCF77(Pin(34, Pin.IN), Pin(33, Pin.OUT), PrintHandler())

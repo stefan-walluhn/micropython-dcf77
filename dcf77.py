@@ -1,15 +1,5 @@
 import micropython
-import time
-from machine import Pin, Timer, disable_irq, enable_irq
-
-
-def irq_handler(func):
-    def stop_start(*args, **kwargs):
-        state = disable_irq()
-        func(*args, **kwargs)
-        enable_irq(state)
-
-    return stop_start
+from machine import Pin, Timer
 
 
 class DCF77Error(ValueError): ...
@@ -28,17 +18,12 @@ class IncompleteBeaconError(DCF77BeaconError): ...
 
 
 class DCF77Handler:
-    def on_tick(self, _):
-        pass
+    def on_tick(self, value): ...
 
-    def on_sync(self, _):
-        pass
+    def on_sync(self, timestamp): ...
 
-    def on_tick_error(self, _):
-        pass
-
-    def on_sync_error(self, _):
-        pass
+    def on_sync_error(self, error) -> None:
+        raise error
 
 
 class DCF77Decoder:
@@ -97,54 +82,32 @@ class DCF77Decoder:
         )
 
 
-class DCF77SyncDetector:
-    def __init__(self):
-        self.last_tick = 0
-
-    def __call__(self, tick):
-        if time.ticks_diff(tick, self.last_tick) > 4000:
-            self.last_tick = tick
-
-        sync_tick = time.ticks_diff(tick, self.last_tick) > 1500
-
-        self.last_tick = tick
-
-        return sync_tick
-
-
 class DCF77:
     def __init__(
         self,
         data_pin,
         enable_pin,
         handler,
-        timers=(Timer(0), Timer(1)),
+        timer=Timer(0),
         decode=DCF77Decoder(),
-        is_sync_tick=DCF77SyncDetector(),
         min_buffer_size=59,
-    ):
-        self.enable_pin = enable_pin
+    ) -> None:
         self.data_pin = data_pin
+        self.enable_pin = enable_pin
         self.handler = handler
-
-        self.timers = timers
+        self.timer = timer
         self.decode = decode
-        self.is_sync_tick = is_sync_tick
         self.min_buffer_size = min_buffer_size
 
+        self.__poll_count__ = 0
+        self.__current__ = 0
+        self.__last__ = 0
         self.__buffer__ = 1 << 60
-
-        self.reset()
-
-    def reset(self):
-        self.__buffer__ = 1
 
     @property
     def beacon(self):
         if self.__buffer__ < (1 << self.min_buffer_size):
-            raise IncompleteBeaconError(
-                f"incomplete beacon: {bin(self.__buffer__)}"
-            )
+            raise IncompleteBeaconError(f"incomplete beacon: {bin(self.__buffer__)}")
 
         # XXX reduce
         beacon = 0
@@ -152,57 +115,47 @@ class DCF77:
             beacon = (beacon << 1) + ((self.__buffer__ >> i) & 1)
         return beacon
 
+    def reset(self):
+        self.__poll_count__ = 0
+        self.__buffer__ = 1
+
     def start(self):
         self.reset()
-        self.__enable_irq__()
         self.enable_pin.off()
+        self.timer.init(period=50, mode=Timer.PERIODIC, callback=self.__poll__)
 
     def stop(self):
+        self.timer.deinit()
         self.enable_pin.on()
-        self.__disable_irq__()
 
-    def __enable_irq__(self):
-        self.data_pin.irq(trigger=Pin.IRQ_RISING, handler=self.__trigger__)
+    def __tick__(self, current):
+        self.__buffer__ = (self.__buffer__ << 1) + current
+        self.handler.on_tick(current)
 
-    def __disable_irq__(self):
-        self.data_pin.irq()
-
-    @irq_handler
-    def __trigger__(self, pin):
-        self.__disable_irq__()
-        tick = time.ticks_ms()
-        self.timers[0].init(
-            period=50,
-            mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__sync__(tick),
-        )
-
-    @irq_handler
-    def __sync__(self, tick):
-        if not self.data_pin():
-            micropython.schedule(self.handler.on_tick_error, InvalidTick())
-            self.__enable_irq__()
-            return
-
+    def __sync__(self, _):
         try:
-            if self.is_sync_tick(tick):
-                micropython.schedule(
-                    self.handler.on_sync, self.decode(self.beacon)
-                )
-                self.reset()
+            self.handler.on_sync(self.decode(self.beacon))
         except DCF77BeaconError as error:
-            micropython.schedule(self.handler.on_sync_error, error)
-            self.reset()
+            self.handler.on_sync_error(error)
+        self.reset()
 
-        self.timers[1].init(
-            period=(150 - time.ticks_diff(time.ticks_ms(), tick)),
-            mode=Timer.ONE_SHOT,
-            callback=lambda t: self.__read__(),
-        )
+    def __poll__(self, _):
+        self.__current__ = self.data_pin()
 
-    @irq_handler
-    def __read__(self):
-        value = self.data_pin()
-        self.__buffer__ = (self.__buffer__ << 1) + value
-        self.__enable_irq__()
-        micropython.schedule(self.handler.on_tick, value)
+        if self.__current__ == 0 and self.__last__ == 1:
+            if self.__poll_count__ > 2:
+                micropython.schedule(self.__tick__, 1)
+            else:
+                micropython.schedule(self.__tick__, 0)
+
+            self.__poll_count__ = 0
+
+        if self.__current__ == 1 and self.__last__ == 0:
+            self.__poll_count__ = 0
+
+        self.__last__ = self.__current__
+        self.__poll_count__ += 1
+
+        if self.__poll_count__ > 30:
+            micropython.schedule(self.__sync__, None)
+            self.__poll_count__ = 0
