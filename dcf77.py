@@ -1,11 +1,10 @@
+import time
+
 import micropython
 from machine import Pin, Timer
 
 
 class DCF77Error(ValueError): ...
-
-
-class InvalidTick(DCF77Error): ...
 
 
 class DCF77BeaconError(DCF77Error): ...
@@ -20,7 +19,7 @@ class IncompleteBeaconError(DCF77BeaconError): ...
 class DCF77Handler:
     def on_tick(self, value): ...
 
-    def on_sync(self, timestamp): ...
+    def on_sync(self, datetime): ...
 
     def on_sync_error(self, error) -> None:
         raise error
@@ -90,7 +89,7 @@ class DCF77:
         handler,
         timer=Timer(0),
         decode=DCF77Decoder(),
-        min_buffer_size=59,
+        min_buffer_size=40,
     ) -> None:
         self.data_pin = data_pin
         self.enable_pin = enable_pin
@@ -115,47 +114,58 @@ class DCF77:
             beacon = (beacon << 1) + ((self.__buffer__ >> i) & 1)
         return beacon
 
-    def reset(self):
+    def start(self):
         self.__poll_count__ = 0
         self.__buffer__ = 1
-
-    def start(self):
-        self.reset()
         self.enable_pin.off()
-        self.timer.init(period=50, mode=Timer.PERIODIC, callback=self.__poll__)
+        self.timer.init(
+            period=40, mode=Timer.PERIODIC, callback=lambda _: self.__poll__()
+        )
 
     def stop(self):
         self.timer.deinit()
         self.enable_pin.on()
 
     def __tick__(self, current):
-        self.__buffer__ = (self.__buffer__ << 1) + current
+        if self.__buffer__ < (1 << 61):
+            self.__buffer__ = (self.__buffer__ << 1) + current
+        else:
+            self.__buffer__ = 1
+
         self.handler.on_tick(current)
 
-    def __sync__(self, _):
+    def __sync__(self):
         try:
             self.handler.on_sync(self.decode(self.beacon))
         except DCF77BeaconError as error:
             self.handler.on_sync_error(error)
-        self.reset()
+        finally:
+            self.start()
 
-    def __poll__(self, _):
+    def __poll__(self):
         self.__current__ = self.data_pin()
 
         if self.__current__ == 0 and self.__last__ == 1:
-            if self.__poll_count__ > 2:
+            if self.__poll_count__ > 3:
                 micropython.schedule(self.__tick__, 1)
             else:
                 micropython.schedule(self.__tick__, 0)
-
-            self.__poll_count__ = 0
 
         if self.__current__ == 1 and self.__last__ == 0:
             self.__poll_count__ = 0
 
         self.__last__ = self.__current__
-        self.__poll_count__ += 1
 
         if self.__poll_count__ > 30:
-            micropython.schedule(self.__sync__, None)
+            self.timer.init(
+                period=800,
+                mode=Timer.ONE_SHOT,
+                callback=lambda _: micropython.schedule(
+                    lambda _: self.__sync__(), None
+                ),
+            )
+
+        if self.__poll_count__ < 75:
+            self.__poll_count__ += 1
+        else:
             self.__poll_count__ = 0

@@ -29,4 +29,7 @@ class RTCHandler(DCF77Handler):
         print(str(error))
 
 
-dcf = DCF77(Pin(34, Pin.IN), Pin(33, Pin.OUT), PrintHandler())
+dcf = DCF77(
+    Pin(34, Pin.IN, Pin.PULL_UP), Pin(33, Pin.OUT), PrintHandler(), timer=Timer(1)
+)
+dcf_rtc = DCF77(Pin(34, Pin.IN), Pin(32, Pin.OUT), RTCHandler(RTC()), timer=Timer(1))
