@@ -25,6 +25,33 @@ class DCF77Handler:
         raise error
 
 
+class DCF77OutlierFilter(DCF77Handler):
+    def __init__(self, handler):
+        self.handler = handler
+
+    def on_tick(self, value):
+        self.handler.on_tick(value)
+
+    def on_sync(self, datetime):
+        epoch = time.time()
+        system_time = time.localtime(epoch)
+
+        if epoch > 7200 and (
+            datetime[0] != system_time[0]
+            or datetime[1] != system_time[1]
+            or datetime[2] != system_time[2]
+        ):
+            self.handler.on_sync_error(
+                DCF77BeaconError(f"unreasonable beacon: {datetime}")
+            )
+            return
+
+        self.handler.on_sync(datetime)
+
+    def on_sync_error(self, error):
+        self.handler.on_sync_error(error)
+
+
 class DCF77Decoder:
     def decode_minute(self, beacon):
         self.raise_on_parity_error((beacon >> 21) & 255)
