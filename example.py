@@ -7,13 +7,13 @@ micropython.alloc_emergency_exception_buf(100)
 
 
 class PrintHandler(DCF77Handler):
-    def on_tick(self, value):
+    def on_tick(self, dcf77, value):
         print(value, end="")
 
-    def on_sync(self, timestamp):
-        print(timestamp)
+    def on_sync(self, dcf77, datetime):
+        print(datetime)
 
-    def on_sync_error(self, error):
+    def on_sync_error(self, dcf77, error):
         print(str(error))
 
 
@@ -21,11 +21,11 @@ class RTCHandler(DCF77Handler):
     def __init__(self, rtc):
         self.rtc = rtc
 
-    def on_sync(self, timestamp):
+    def on_sync(self, dcf77, datetime):
         print("syncing clock")
-        self.rtc.datetime(timestamp)
+        self.rtc.datetime(datetime)
 
-    def on_sync_error(self, error):
+    def on_sync_error(self, dcf77, error):
         print(str(error))
 
 

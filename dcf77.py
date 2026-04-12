@@ -17,22 +17,35 @@ class IncompleteBeaconError(DCF77BeaconError): ...
 
 
 class DCF77Handler:
-    def on_tick(self, value): ...
+    def on_tick(self, dcf77, value):
+        del dcf77
+        del value
 
-    def on_sync(self, datetime): ...
+    def on_sync(self, dcf77, datetime):
+        del dcf77
+        del datetime
 
-    def on_sync_error(self, error) -> None:
+    def on_sync_error(self, dcf77, error) -> None:
+        del dcf77
         raise error
 
 
-class DCF77OutlierFilter(DCF77Handler):
-    def __init__(self, handler):
+class DCF77ProxyHandler(DCF77Handler):
+    def __init__(self, handler: DCF77Handler):
         self.handler = handler
 
-    def on_tick(self, value):
-        self.handler.on_tick(value)
+    def on_tick(self, dcf77, value):
+        self.handler.on_tick(dcf77, value)
 
-    def on_sync(self, datetime):
+    def on_sync(self, dcf77, datetime):
+        self.handler.on_sync(dcf77, datetime)
+
+    def on_sync_error(self, dcf77, error):
+        self.handler.on_sync_error(dcf77, error)
+
+
+class DCF77FilterOutlierHandler(DCF77ProxyHandler):
+    def on_sync(self, dcf77, datetime):
         epoch = time.time()
         system_time = time.localtime(epoch)
 
@@ -41,15 +54,22 @@ class DCF77OutlierFilter(DCF77Handler):
             or datetime[1] != system_time[1]
             or datetime[2] != system_time[2]
         ):
-            self.handler.on_sync_error(
-                DCF77BeaconError(f"unreasonable beacon: {datetime}")
+            super().on_sync_error(
+                dcf77, DCF77BeaconError(f"unreasonable beacon: {datetime}")
             )
             return
 
-        self.handler.on_sync(datetime)
+        super().on_sync(dcf77, datetime)
 
-    def on_sync_error(self, error):
-        self.handler.on_sync_error(error)
+
+class DCF77SleepAfterSyncHandler(DCF77ProxyHandler):
+    def __init__(self, handler, sleep_seconds):
+        self.sleep_seconds = sleep_seconds
+        super().__init__(handler)
+
+    def on_sync(self, dcf77, datetime):
+        dcf77.sleep(self.sleep_seconds)
+        super().on_sync(dcf77, datetime)
 
 
 class DCF77Decoder:
@@ -153,21 +173,32 @@ class DCF77:
         self.timer.deinit()
         self.enable_pin.on()
 
+    def sleep(self, seconds):
+        self.stop()
+        self.timer.init(
+            period=(1000 * seconds),
+            mode=Timer.ONE_SHOT,
+            callback=lambda _: self.start(),
+        )
+
     def __tick__(self, current):
         if self.__buffer__ < (1 << 61):
             self.__buffer__ = (self.__buffer__ << 1) + current
         else:
             self.__buffer__ = 1
 
-        self.handler.on_tick(current)
+        self.handler.on_tick(self, current)
 
     def __sync__(self):
         try:
-            self.handler.on_sync(self.decode(self.beacon))
+            datetime = self.decode(self.beacon)
         except DCF77BeaconError as error:
-            self.handler.on_sync_error(error)
+            self.handler.on_sync_error(self, error)
+            return
         finally:
             self.start()
+
+        self.handler.on_sync(self, datetime)
 
     def __poll__(self):
         self.__current__ = self.data_pin()
